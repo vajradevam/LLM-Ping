@@ -46,6 +46,9 @@ class ModelDetailScreen(ModalScreen):
         with Static(id="model-detail"):
             yield Static(f"[bold]Model:[/bold] {self.model.id}", id="model-id")
             yield Static(f"[bold]Provider:[/bold] {self.model.api_provider}", id="provider")
+            yield Static(f"[bold]Type:[/bold] {self.model.model_type}", id="model-type")
+            size_s = f"{self.model.size_b:.0f}B" if self.model.size_b is not None else "-"
+            yield Static(f"[bold]Size:[/bold] {size_s}", id="model-size")
             yield Static(f"[bold]API Key:[/bold] {mask_api_key(self.api_key)}", id="api-key")
             yield Button("Copy API Key", id="copy-btn", variant="primary")
             yield Button("Close", id="close-btn")
@@ -88,6 +91,8 @@ class LLMPing(App):
         Binding("p", "sort_by_api", "Sort by API Provider"),
         Binding("m", "sort_by_model_provider", "Sort by Model Provider"),
         Binding("t", "sort_by_ttft", "Sort by TTFT"),
+        Binding("z", "sort_by_size", "Sort by Size"),
+        Binding("c", "sort_by_type", "Sort by Type"),
         Binding("f", "toggle_filter", "Toggle Filter"),
         Binding("q", "quit", "Quit"),
     ]
@@ -103,7 +108,7 @@ class LLMPing(App):
         table.cursor_type = "row"
         table.zebra_stripes = True
         table.add_columns(
-            "Model", "API Provider", "Model Provider", "Status", "Latency (ms)", "TTFT (ms)"
+            "Model", "API Provider", "Model Provider", "Status", "Latency (ms)", "TTFT (ms)", "Size (B)", "Type"
         )
         self.providers: list[BaseProvider] = []
         self.models: list[ModelInfo] = []
@@ -154,8 +159,9 @@ class LLMPing(App):
 
         table.clear()
         for m in self.models:
+            size_s = f"{m.size_b:.0f}" if m.size_b is not None else "-"
             table.add_row(
-                m.id, m.api_provider, m.model_provider, "~", "-", "-", key=self._key(m),
+                m.id, m.api_provider, m.model_provider, "~", "-", "-", size_s, m.model_type, key=self._key(m),
             )
 
         status_widget.update(f"Checking latency for {total} models across {len(self.providers)} providers ...")
@@ -220,13 +226,14 @@ class LLMPing(App):
         for m in models:
             latency_s = f"{m.latency_ms:.0f}" if m.latency_ms is not None else "-"
             ttft_s = f"{m.ttft_ms:.0f}" if m.ttft_ms is not None else "-"
+            size_s = f"{m.size_b:.0f}" if m.size_b is not None else "-"
             status_map = {
                 "ok": "ok", "pending": "~", "no_access": "no",
                 "unsupported": "unsup", "timeout": "timeout", "error": "err", "rate_limited": "rate",
             }
             status_s = status_map.get(m.status, "?")
             table.add_row(
-                m.id, m.api_provider, m.model_provider, status_s, latency_s, ttft_s,
+                m.id, m.api_provider, m.model_provider, status_s, latency_s, ttft_s, size_s, m.model_type,
                 key=self._key(m),
             )
 
@@ -273,6 +280,23 @@ class LLMPing(App):
             f"Showing {len(ok)} accessible models sorted by TTFT"
         )
 
+    def action_sort_by_size(self) -> None:
+        ok = [m for m in self.models if m.status == "ok" and m.size_b is not None]
+        ok.sort(key=lambda x: x.size_b)
+        unsized = [m for m in self.models if m.status == "ok" and m.size_b is None]
+        self._repopulate(ok + unsized)
+        self.query_one("#status-bar", Static).update(
+            f"Showing {len(ok) + len(unsized)} accessible models sorted by size"
+        )
+
+    def action_sort_by_type(self) -> None:
+        ok = [m for m in self.models if m.status == "ok"]
+        ok.sort(key=lambda x: (x.model_type, x.size_b or 999, x.id))
+        self._repopulate(ok)
+        self.query_one("#status-bar", Static).update(
+            f"Showing {len(ok)} accessible models sorted by type"
+        )
+
     def action_toggle_filter(self) -> None:
         self.show_all = not self.show_all
         if self.show_all:
@@ -290,9 +314,12 @@ class LLMPing(App):
             key = str(event.row_key.value)
             for m in self.models:
                 if self._key(m) == key:
+                    size_s = f"{m.size_b:.0f}B" if m.size_b is not None else "-"
                     self.query_one("#status-bar", Static).update(
                         f"{m.id}  |  API: {m.api_provider}  |  "
                         f"Provider: {m.model_provider}  |  "
+                        f"Type: {m.model_type}  |  "
+                        f"Size: {size_s}  |  "
                         f"TTFT: {m.ttft_ms or '-'}ms  |  "
                         f"Total: {m.total_time_ms or '-'}ms  |  "
                         f"Status: {m.status}"

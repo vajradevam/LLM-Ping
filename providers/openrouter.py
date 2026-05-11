@@ -1,4 +1,4 @@
-from . import PROVIDER_REGISTRY, BaseProvider, ModelInfo
+from . import PROVIDER_REGISTRY, BaseProvider, ModelInfo, parse_model_type, parse_size_b
 
 
 class OpenRouterProvider(BaseProvider):
@@ -17,10 +17,15 @@ class OpenRouterProvider(BaseProvider):
             prompt_price = pricing.get("prompt", "0")
             completion_price = pricing.get("completion", "0")
             if prompt_price == "0" and completion_price == "0":
+                arch = m.get("architecture") or {}
+                param_count = arch.get("parameter_count")
+                size_b = param_count / 1e9 if param_count else parse_size_b(mid)
                 models.append(ModelInfo(
                     id=mid,
                     api_provider=self.name,
                     model_provider=self._parse_provider(mid),
+                    size_b=size_b,
+                    model_type=parse_model_type(mid),
                 ))
         return models
 

@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -11,6 +12,38 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 
+def parse_size_b(model_id: str) -> Optional[float]:
+    """Parse parameter count (billions) from a model ID."""
+    mid = model_id.lower()
+    m = re.search(r'(\d+)x(\d+)b', mid)
+    if m:
+        return float(m.group(1)) * float(m.group(2))
+    m = re.search(r'(\d+)b', mid)
+    if m:
+        return float(m.group(1))
+    return None
+
+
+def parse_model_type(model_id: str) -> str:
+    """Classify model from ID into a semantic type label."""
+    mid = model_id.lower()
+    if 'realtime' in mid:
+        return 'realtime'
+    if 'embed' in mid:
+        return 'embed'
+    if 'guard' in mid:
+        return 'guardrail'
+    if 'r1' in mid or 'reasoning' in mid or 'thinking' in mid:
+        return 'reasoning'
+    if 'vision' in mid or 'multimodal' in mid:
+        return 'vision'
+    if 'code' in mid or 'coder' in mid:
+        return 'code'
+    if 'instruct' in mid or 'chat' in mid:
+        return 'instruct'
+    return 'general'
+
+
 @dataclass
 class ModelInfo:
     id: str
@@ -21,6 +54,8 @@ class ModelInfo:
     total_time_ms: Optional[float] = None
     prefill_ms: Optional[float] = None
     status: str = "pending"
+    size_b: Optional[float] = None
+    model_type: str = ""
 
 
 class BaseProvider(ABC):

@@ -2,7 +2,7 @@ import time
 
 import httpx
 
-from . import PROVIDER_REGISTRY, BaseProvider, ModelInfo
+from . import PROVIDER_REGISTRY, BaseProvider, ModelInfo, parse_model_type, parse_size_b
 
 
 ZAI_KNOWN_MODELS = [
@@ -25,6 +25,8 @@ class ZaiProvider(BaseProvider):
                 id=mid,
                 api_provider=self.name,
                 model_provider=self._parse_provider(mid),
+                size_b=parse_size_b(mid),
+                model_type=parse_model_type(mid),
             ))
         return models
 
