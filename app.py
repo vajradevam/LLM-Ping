@@ -1,16 +1,61 @@
 import asyncio
 import os
 import time
+import tkinter as tk
 from typing import Optional
 
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Footer, Header, Static
 from textual.worker import Worker, WorkerState
 
 from providers import PROVIDER_REGISTRY, BaseProvider, ModelInfo
 from providers import nvidia, openrouter, groq, zai
+
+
+def copy_to_clipboard(text: str) -> None:
+    """Copy text to system clipboard using tkinter."""
+    root = tk.Tk()
+    root.withdraw()
+    root.clipboard_clear()
+    root.clipboard_append(text)
+    root.update()
+    root.destroy()
+
+
+def mask_api_key(key: str) -> str:
+    """Partially mask an API key, showing first 6 and last 4 chars."""
+    if len(key) <= 10:
+        return "*" * len(key)
+    return f"{key[:6]}...{key[-4:]}"
+
+
+class ModelDetailScreen(ModalScreen):
+    """Modal screen showing model details with API key."""
+
+    BINDINGS = [("escape", "dismiss", "Close")]
+
+    def __init__(self, model: ModelInfo, api_key: str):
+        self.model = model
+        self.api_key = api_key
+        super().__init__()
+
+    def compose(self) -> ComposeResult:
+        with Static(id="model-detail"):
+            yield Static(f"[bold]Model:[/bold] {self.model.id}", id="model-id")
+            yield Static(f"[bold]Provider:[/bold] {self.model.api_provider}", id="provider")
+            yield Static(f"[bold]API Key:[/bold] {mask_api_key(self.api_key)}", id="api-key")
+            yield Button("Copy API Key", id="copy-btn", variant="primary")
+            yield Button("Close", id="close-btn")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "copy-btn":
+            copy_to_clipboard(self.api_key)
+            self.app.notify("API Key copied to clipboard")
+        elif event.button.id == "close-btn":
+            self.dismiss()
 
 
 class LLMPing(App):
@@ -25,6 +70,16 @@ class LLMPing(App):
     DataTable > .datatable--header {
         background: $primary 20%; color: $text; text-style: bold;
     }
+    ModelDetailScreen { align: center middle; }
+    #model-detail {
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+        width: 60;
+        max-width: 80;
+    }
+    #model-detail Static { margin: 1 0; }
+    #model-detail Button { margin: 1 0; width: 100%; }
     """
 
     BINDINGS = [
@@ -243,6 +298,14 @@ class LLMPing(App):
                         f"Status: {m.status}"
                     )
                     break
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        key = str(event.row_key.value)
+        model = next((m for m in self.models if self._key(m) == key), None)
+        if model:
+            provider = next((p for p in self.providers if p.name == model.api_provider), None)
+            if provider:
+                self.push_screen(ModelDetailScreen(model, provider.api_key))
 
 
 if __name__ == "__main__":
