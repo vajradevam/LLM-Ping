@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import time
@@ -84,33 +85,53 @@ class BaseProvider(ABC):
     async def get_models(self) -> list[ModelInfo]:
         ...
 
-    async def check_latency(self, model: ModelInfo) -> ModelInfo:
+    async def check_latency(self, model: ModelInfo, max_retries: int = 2) -> ModelInfo:
+        """Check latency with retry for rate-limited models."""
+        for attempt in range(max_retries + 1):
+            await self._do_check(model)
+            if model.status != "rate_limited":
+                return model
+            if attempt < max_retries:
+                await asyncio.sleep(2 * (attempt + 1))  # 2s, 4s backoff
+        return model
+
+    async def _do_check(self, model: ModelInfo) -> ModelInfo:
+        """Send a streaming request and measure TTFT and total time."""
         payload = {
             "model": model.id,
             "messages": [{"role": "user", "content": "Hi"}],
             "max_tokens": 5,
             "temperature": 0.1,
+            "stream": True,
         }
         try:
             start = time.monotonic()
-            resp = await self._client.post("/chat/completions", json=payload)
-            wall_ms = (time.monotonic() - start) * 1000
-
-            if resp.status_code == 200:
-                self._extract_timing(model, resp, wall_ms)
-                model.status = "ok"
-            elif resp.status_code in (402, 403):
-                model.status = "no_access"
-            elif resp.status_code == 429:
-                model.status = "rate_limited"
-            elif resp.status_code == 400:
-                body = resp.text[:100].lower()
-                if "not supported" in body or "not found" in body or "not implemented" in body:
-                    model.status = "unsupported"
+            async with self._client.stream("POST", "/chat/completions", json=payload) as resp:
+                if resp.status_code == 200:
+                    ttft_recorded = False
+                    async for line in resp.aiter_lines():
+                        if not ttft_recorded and line.startswith("data: ") and line != "data: [DONE]":
+                            model.ttft_ms = round((time.monotonic() - start) * 1000, 1)
+                            ttft_recorded = True
+                    wall_ms = (time.monotonic() - start) * 1000
+                    model.total_time_ms = round(wall_ms, 1)
+                    model.latency_ms = model.total_time_ms
+                    if not ttft_recorded:
+                        model.ttft_ms = model.total_time_ms
+                    model.status = "ok"
+                elif resp.status_code in (402, 403):
+                    model.status = "no_access"
+                elif resp.status_code == 429:
+                    model.status = "rate_limited"
+                elif resp.status_code == 400:
+                    await resp.aread()
+                    body = resp.text[:100].lower()
+                    if "not supported" in body or "not found" in body or "not implemented" in body:
+                        model.status = "unsupported"
+                    else:
+                        model.status = "error"
                 else:
-                    model.status = "error"
-            else:
-                model.status = f"http_{resp.status_code}"
+                    model.status = f"http_{resp.status_code}"
         except httpx.TimeoutException:
             model.status = "timeout"
         except Exception:
@@ -118,6 +139,7 @@ class BaseProvider(ABC):
         return model
 
     def _extract_timing(self, model: ModelInfo, resp: httpx.Response, wall_ms: float) -> None:
+        """Legacy non-streaming timing extraction (kept for subclass compatibility)."""
         model.total_time_ms = round(wall_ms, 1)
         model.latency_ms = model.total_time_ms
         model.ttft_ms = round(wall_ms, 1)
